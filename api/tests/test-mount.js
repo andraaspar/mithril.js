@@ -269,6 +269,233 @@ o.spec("mount", function() {
 				o(after).equals(1) // throttles rest
 				o(i).equals(2)
 			})
+			
+			o("can trigger immediate redraw in mount > oncreate", function(done) {
+				var sequence = []
+				
+				var oncreate = o.spy(function() {
+					
+					sequence.push("oncreate")
+					
+					redrawService.redraw()
+						.then(function() {
+							
+							sequence.push("oncreate.redraw.then")
+							
+							o(sequence).deepEquals([
+								"oncreate",
+								"oncreate.redraw.then",
+							])
+							
+							done()
+						})
+				})
+				
+				mount(root, createComponent({
+					view: function() {
+						return m("div", {
+							oncreate: oncreate
+						})
+					}
+				}))
+			})
+			
+			o("can trigger immediate redraw in onupdate", function(done) {
+				var sequence = []
+				
+				var updateRedrawNow = false
+				var onupdate = o.spy(function() {
+					
+					if (updateRedrawNow) {
+						updateRedrawNow = false // Prevent recursion
+						
+						sequence.push("onupdate.redraw")
+						
+						redrawService.redraw() // Request redraw within onupdate --> this will execute immediately after the current render cycle
+							.then(function() {
+								
+								sequence.push("onupdate.redraw.then")
+								
+								sequence.push("onupdate.redraw.then.redraw")
+								
+								redrawService.redraw() // Request redraw within callback --> this will execute on the next frame
+									.then(function() {
+										
+										sequence.push("onupdate.redraw.then.redraw.then")
+										
+										o(sequence).deepEquals([
+											"redraw",
+											"fire",
+											"onupdate.redraw",
+											"onupdate.redraw - end",
+											"end",
+											"onupdate.redraw.then",
+											"onupdate.redraw.then.redraw",
+											"onupdate.redraw.then.fire",
+											"onupdate.redraw.then - end",
+											"onupdate.redraw.then.redraw.then",
+										])
+										
+										done()
+									})
+								
+								sequence.push("onupdate.redraw.then.fire")
+								
+								throttleMock.fire() // Next frame
+								
+								sequence.push("onupdate.redraw.then - end")
+							})
+						
+						sequence.push("onupdate.redraw - end")
+					}
+				})
+				
+				mount(root, createComponent({
+					view: function() {
+						return m("div", {
+							onupdate: onupdate
+						})
+					}
+				}))
+				
+				// Mount render cycle complete
+				
+				sequence.push("redraw")
+				
+				updateRedrawNow = true
+				
+				redrawService.redraw() // Redraw on next frame
+					
+				sequence.push("fire")
+				
+				throttleMock.fire() // Next frame
+				
+				sequence.push("end")
+			})
+			
+			o("throttles redraw promise", function(done) {
+				var sequence = []
+				
+				var onupdate = o.spy()
+				
+				mount(root, createComponent({
+					view: function() {
+						return m("div", {
+							onupdate: onupdate
+						})
+					}
+				}))
+				
+				// Mount render cycle complete
+				
+				sequence.push("redraw")
+				
+				redrawService.redraw() // Redraw on next frame
+					.then(function() {
+						
+						sequence.push("redraw.then")
+						
+					})
+				
+				sequence.push("redraw2")
+				redrawService.redraw() // Throttled: refers to same promise as above
+					.then(function() {
+						
+						sequence.push("redraw2.then")
+						
+						o(onupdate.callCount).equals(1)
+						
+						o(sequence).deepEquals([
+							"redraw",
+							"redraw2",
+							"fire",
+							"end",
+							"redraw.then",
+							"redraw2.then",
+						])
+						
+						done()
+					})
+				
+				sequence.push("fire")
+				
+				throttleMock.fire() // Next frame
+				
+				sequence.push("end")
+			})
+			
+			o("no nested redraws", function() {
+				var sequence = []
+				
+				var oncreate = o.spy(function() {
+					sequence.push("oncreate")
+				})
+				var oncreateTriggerRedraw = o.spy(function() {
+					sequence.push("oncreateTriggerRedraw")
+					redrawService.redraw()
+				})
+				var onupdate = o.spy(function() {
+					sequence.push("onupdate")
+				})
+				
+				mount(root, createComponent({
+					view: function() {
+						return m("div", {
+							oncreate: oncreate,
+							onupdate: onupdate
+						},
+							m("div", {
+								oncreate: oncreate,
+								onupdate: onupdate
+							},
+								m("div", {
+									oncreate: oncreate,
+									onupdate: onupdate
+								})
+							),
+							m("div", {
+								oncreate: oncreateTriggerRedraw,
+								onupdate: onupdate
+							},
+								m("div", {
+									oncreate: oncreate,
+									onupdate: onupdate
+								})
+							),
+							m("div", {
+								oncreate: oncreate,
+								onupdate: onupdate
+							},
+								m("div", {
+									oncreate: oncreate,
+									onupdate: onupdate
+								})
+							)
+						)
+					}
+				}))
+				
+				o(oncreate.callCount).equals(6)
+				o(oncreateTriggerRedraw.callCount).equals(1)
+				o(onupdate.callCount).equals(7)
+				
+				o(sequence).deepEquals([
+					"oncreate",
+					"oncreate",
+					"oncreate",
+					"oncreateTriggerRedraw",
+					"oncreate",
+					"oncreate",
+					"oncreate",
+					"onupdate",
+					"onupdate",
+					"onupdate",
+					"onupdate",
+					"onupdate",
+					"onupdate",
+					"onupdate",
+				])
+			})
 		})
 	})
 })
